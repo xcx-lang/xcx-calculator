@@ -1,0 +1,199 @@
+--- ============================================================
+--- tokenizer.xcx
+
+--- Responsibility: break a raw expression string into a flat
+--- list of string tokens stored in the shared `token_list`
+--- array. Tokens are one of:
+---   - number literal   e.g. "3.14"
+---   - binary operator  e.g. "+" "-" "*" "/" "^" "%"
+---   - parenthesis      "(" or ")"
+---   - named constant   e.g. "PI" "E" "TAU"
+---   - named function   e.g. "sqrt" "sin" "factorial"
+
+--- Unary minus is resolved here: a "-" that appears at the
+--- start of the expression, or immediately after "(" or another
+--- operator, is preceded by an implicit "0" so the rest of the
+--- pipeline only ever sees binary operators.
+--- Usage:
+---   tokenize(expression);
+---   --- token_list is now populated and ready for the parser
+--- ============================================================
+
+--- ---- SHARED TOKEN LIST ----
+--- Populated by tokenize(), consumed by shunting_yard() in parser.xcx
+
+array:s: token_list {};
+
+
+--- ---- CHARACTER CLASSIFICATION ----
+
+--- Returns true if the character is an ASCII decimal digit.
+func char_is_digit(s: character -> b) {
+    return character == "0" OR character == "1" OR character == "2"
+        OR character == "3" OR character == "4" OR character == "5"
+        OR character == "6" OR character == "7" OR character == "8"
+        OR character == "9";
+};
+
+--- Returns true if the character can appear in a name token
+--- (letter, digit, or underscore). Used to collect constants
+--- like "PI" and function names like "sqrt".
+func char_is_name_part(s: character -> b) {
+    return character == "a" OR character == "b" OR character == "c"
+        OR character == "d" OR character == "e" OR character == "f"
+        OR character == "g" OR character == "h" OR character == "i"
+        OR character == "j" OR character == "k" OR character == "l"
+        OR character == "m" OR character == "n" OR character == "o"
+        OR character == "p" OR character == "q" OR character == "r"
+        OR character == "s" OR character == "t" OR character == "u"
+        OR character == "v" OR character == "w" OR character == "x"
+        OR character == "y" OR character == "z"
+        OR character == "A" OR character == "B" OR character == "C"
+        OR character == "D" OR character == "E" OR character == "F"
+        OR character == "G" OR character == "H" OR character == "I"
+        OR character == "J" OR character == "K" OR character == "L"
+        OR character == "M" OR character == "N" OR character == "O"
+        OR character == "P" OR character == "Q" OR character == "R"
+        OR character == "S" OR character == "T" OR character == "U"
+        OR character == "V" OR character == "W" OR character == "X"
+        OR character == "Y" OR character == "Z"
+        OR character == "_"
+        OR char_is_digit(character);
+};
+
+--- Returns true if the token is one of the six supported
+--- binary operators.
+func token_is_operator(s: token -> b) {
+    return token == "+" OR token == "-" OR token == "*"
+        OR token == "/" OR token == "^" OR token == "%";
+};
+
+
+--- ---- UNARY MINUS DETECTION ----
+
+--- Returns true when a "-" sign at the current position should
+--- be treated as unary (i.e. negation) rather than binary
+--- subtraction. This happens when:
+---   1. The token list is still empty  (start of expression)
+---   2. The previous token is "("     (start of sub-expression)
+---   3. The previous token is an operator (e.g. "* -2")
+--- In these cases the tokenizer inserts a synthetic "0" before
+--- the "-" so the rest of the pipeline sees "0 - value".
+func minus_is_unary(-> b) {
+    if (token_list.isEmpty()) then;
+        return true;
+    end;
+    s: previous_token = token_list.get(token_list.size() - 1);
+    return previous_token == "(" OR token_is_operator(previous_token);
+};
+
+
+--- ---- NUMBER SCANNING ----
+
+--- Scans a numeric literal (integer or decimal) starting at
+--- `start_pos` in `expression`. Advances the shared position
+--- counter and pushes the completed number string onto
+--- token_list.
+--- .
+--- Accepts digits and at most one decimal point, e.g.:
+---   "42"   "3.14"   ".5"
+func scan_number(s: expression, i: start_pos, i: expression_length -> i) {
+    s: number_buffer = "";
+    i: current_pos   = start_pos;
+
+    while (current_pos < expression_length) do;
+        s: current_char = expression.slice(current_pos, current_pos + 1);
+        if (char_is_digit(current_char) OR current_char == ".") then;
+            number_buffer = number_buffer + current_char;
+            current_pos   = current_pos + 1;
+        else;
+            i: stop = 1;
+            if (stop == 1) then; break; end;
+        end;
+    end;
+
+    token_list.push(number_buffer);
+    return current_pos;
+};
+
+
+--- ---- NAME SCANNING ----
+
+--- Scans a name token (constant or function) starting at
+--- `start_pos`. Names consist of letters, digits and
+--- underscores. The completed name is pushed onto token_list.
+--- .
+--- Examples of valid names:  "PI"  "sqrt"  "fibonacci"
+func scan_name(s: expression, i: start_pos, i: expression_length -> i) {
+    s: name_buffer = "";
+    i: current_pos = start_pos;
+
+    while (current_pos < expression_length) do;
+        s: current_char = expression.slice(current_pos, current_pos + 1);
+        if (char_is_name_part(current_char)) then;
+            name_buffer = name_buffer + current_char;
+            current_pos = current_pos + 1;
+        else;
+            i: stop = 1;
+            if (stop == 1) then; break; end;
+        end;
+    end;
+
+    token_list.push(name_buffer);
+    return current_pos;
+};
+
+
+--- ---- MAIN TOKENIZER ----
+
+--- Converts `expression` into a list of string tokens stored
+--- in `token_list`. Call this before shunting_yard().
+--- .
+--- The function handles:
+---   - whitespace  (skipped silently)
+---   - parentheses (pushed as single-character tokens)
+---   - operators   (with unary-minus detection)
+---   - numbers     (delegated to scan_number)
+---   - names       (delegated to scan_name)
+---   - unknown characters (skipped with no error)
+func tokenize(s: expression) {
+    token_list.clear();
+
+    i: current_pos      = 0;
+    i: expression_length = expression.length;
+
+    while (current_pos < expression_length) do;
+        s: current_char = expression.slice(current_pos, current_pos + 1);
+
+        --- Whitespace: skip silently
+        if (current_char == " ") then;
+            current_pos = current_pos + 1;
+
+        --- Parentheses: push as-is
+        elif (current_char == "(" OR current_char == ")") then;
+            token_list.push(current_char);
+            current_pos = current_pos + 1;
+
+        --- Operators: handle unary minus before pushing
+        elif (token_is_operator(current_char)) then;
+            if (current_char == "-" AND minus_is_unary()) then;
+                --- Insert implicit zero so the parser sees "0 - x"
+                token_list.push("0");
+            end;
+            token_list.push(current_char);
+            current_pos = current_pos + 1;
+
+        --- Number literal: delegate to scanner
+        elif (char_is_digit(current_char) OR current_char == ".") then;
+            current_pos = scan_number(expression, current_pos, expression_length);
+
+        --- Named constant or function: delegate to scanner
+        elif (char_is_name_part(current_char)) then;
+            current_pos = scan_name(expression, current_pos, expression_length);
+
+        --- Unknown character: skip
+        else;
+            current_pos = current_pos + 1;
+        end;
+    end;
+};

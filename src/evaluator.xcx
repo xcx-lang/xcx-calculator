@@ -1,0 +1,143 @@
+--- ============================================================
+--- evaluator.xcx
+--- .
+--- Responsibility: walk the `rpn_queue` produced by parser.xcx
+--- left-to-right and compute the final numeric result.
+--- .
+--- The algorithm uses a single value stack:
+---   - numbers   → pushed onto the stack
+---   - operators → pop two operands, compute, push result
+---   - functions → pop one operand, apply, push result
+--- .
+--- Also owns the binary arithmetic and the unary function
+--- dispatch table (delegating to math.xcx for the actual math).
+--- .
+--- Usage:
+---   tokenize(expression);       --- tokenizer.xcx
+---   parse_to_rpn();             --- parser.xcx
+---   f: result = evaluate_rpn(); --- this file
+--- ============================================================
+
+include "parser.xcx";       --- provides rpn_queue, token_is_operator,
+                            ---           token_is_function
+
+
+--- ---- BINARY ARITHMETIC ----
+
+--- Applies a binary operator to two float operands and returns
+--- the result. Division and modulo guard against zero divisors.
+func apply_binary_operator(f: left_operand, f: right_operand, s: operator_token -> f) {
+    if (operator_token == "+") then; return left_operand + right_operand; end;
+    if (operator_token == "-") then; return left_operand - right_operand; end;
+    if (operator_token == "*") then; return left_operand * right_operand; end;
+    if (operator_token == "^") then; return left_operand ^ right_operand; end;
+
+    if (operator_token == "/") then;
+        if (right_operand == 0.0) then;
+            halt.error >! "Error: division by zero";
+            return 0.0;
+        end;
+        return left_operand / right_operand;
+    end;
+
+    if (operator_token == "%") then;
+        if (right_operand == 0.0) then;
+            halt.error >! "Error: modulo by zero";
+            return 0.0;
+        end;
+        --- XCX modulo works on integers; cast both sides
+        return f(i(left_operand) % i(right_operand));
+    end;
+
+    halt.error >! "Error: unknown operator: " + operator_token;
+    return 0.0;
+};
+
+
+--- ---- UNARY FUNCTION DISPATCH ----
+
+--- Calls the named unary math function on `argument` and
+--- returns the result. All heavy lifting is delegated to the
+--- implementations in math.xcx.
+--- .
+--- Integer-domain functions (factorial, fibonacci, floor, ceil,
+--- round) truncate the float argument to int before calling and
+--- promote the result back to float.
+func apply_unary_function(s: function_name, f: argument -> f) {
+    if (function_name == "sqrt")      then; return math.sqrt_f(argument);          end;
+    if (function_name == "cbrt")      then; return math.cbrt_f(argument);          end;
+    if (function_name == "sin")       then; return math.sin_f(argument);           end;
+    if (function_name == "cos")       then; return math.cos_f(argument);           end;
+    if (function_name == "tan")       then; return math.tan_f(argument);           end;
+    if (function_name == "asin")      then; return math.asin_f(argument);          end;
+    if (function_name == "acos")      then; return math.acos_f(argument);          end;
+    if (function_name == "atan")      then; return math.atan_f(argument);          end;
+    if (function_name == "ln")        then; return math.ln_f(argument);            end;
+    if (function_name == "log2")      then; return math.log2_f(argument);          end;
+    if (function_name == "log10")     then; return math.log10_f(argument);         end;
+    if (function_name == "exp")       then; return math.exp_f(argument);           end;
+    if (function_name == "abs")       then; return math.abs_f(argument);           end;
+    if (function_name == "floor")     then; return f(math.floor_f(argument));      end;
+    if (function_name == "ceil")      then; return f(math.ceil_f(argument));       end;
+    if (function_name == "round")     then; return f(math.round_f(argument));      end;
+    if (function_name == "factorial") then; return f(math.factorial(i(argument))); end;
+    if (function_name == "fibonacci") then; return f(math.fibonacci(i(argument))); end;
+
+    halt.error >! "Error: unknown function: " + function_name;
+    return 0.0;
+};
+
+
+--- ---- RPN EVALUATOR ----
+
+--- Evaluates the `rpn_queue` and returns the computed float
+--- result. Expects parse_to_rpn() to have been called first.
+--- .
+--- Exits with halt.error if:
+---   - a function token has no operand available
+---   - an operator token has fewer than two operands available
+---   - the queue is malformed (not exactly one value remains)
+func evaluate_rpn(-> f) {
+    array:f: value_stack {};
+
+    i: token_index = 0;
+    i: token_count = rpn_queue.size();
+
+    while (token_index < token_count) do;
+        s: current_token = rpn_queue.get(token_index);
+
+        --- Unary function: pop one argument, apply, push result
+        if (token_is_function(current_token)) then;
+            if (value_stack.size() < 1) then;
+                halt.error >! "Error: missing argument for function " + current_token;
+                return 0.0;
+            end;
+            f: function_argument = value_stack.pop();
+            value_stack.push(apply_unary_function(current_token, function_argument));
+
+        --- Binary operator: pop two operands, compute, push result
+        elif (token_is_operator(current_token)) then;
+            if (value_stack.size() < 2) then;
+                halt.error >! "Error: malformed expression near operator " + current_token;
+                return 0.0;
+            end;
+            f: right_operand = value_stack.pop();
+            f: left_operand  = value_stack.pop();
+            value_stack.push(apply_binary_operator(left_operand, right_operand, current_token));
+
+        --- Number token: parse and push onto the value stack
+        else;
+            value_stack.push(current_token.toFloat());
+        end;
+
+        token_index = token_index + 1;
+    end;
+
+    --- A well-formed expression leaves exactly one value on the stack
+    if (value_stack.size() != 1) then;
+        halt.error >! "Error: incomplete or malformed expression";
+        return 0.0;
+    end;
+
+    return value_stack.pop();
+};

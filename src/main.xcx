@@ -1,0 +1,102 @@
+--- ============================================================
+--- main.xcx
+--- .
+--- Entry point for the XCX expression calculator.
+--- .
+--- Responsibility: run the interactive REPL (Read-Eval-Print
+--- Loop). For each line of user input the program:
+---   1. Tokenizes the expression         (tokenizer.xcx)
+---   2. Converts it to RPN               (parser.xcx)
+---   3. Evaluates the RPN                (evaluator.xcx)
+---   4. Prints the result
+--- .
+--- Type "q" or "quit" to exit.
+--- .
+--- Example session:
+---   > 2 + 3 * 4
+---   = 14
+---   > sqrt(PI ^ 2) + sin(TAU / 4)
+---   = 4.1415926535...
+---   > factorial(10) / fibonacci(15)
+---   = 5948.85...
+--- ============================================================
+
+include "evaluator.xcx";   --- pulls in parser.xcx → tokenizer.xcx → math.xcx
+
+
+--- ---- HELP BANNER ----
+
+--- Prints the welcome message and a reference card listing all
+--- supported operators, constants, and functions.
+func print_help_banner() {
+    >! "================================================================";
+    >! "  XCX Expression Calculator  (XCX 2.2 + mathlib)";
+    >! "================================================================";
+    >! "  Operators : + - * / ^ %";
+    >! "  Constants : PI  E  TAU  PHI  SQRT2  INF";
+    >! "  Functions : sqrt   cbrt   abs    floor  ceil   round";
+    >! "             sin    cos    tan    asin   acos   atan";
+    >! "             ln     log2   log10  exp";
+    >! "             factorial   fibonacci";
+    >! "----------------------------------------------------------------";
+    >! "  Examples  : 2 + 3 * 4 ^ 2";
+    >! "             sqrt(PI ^ 2) + sin(TAU / 4)";
+    >! "             factorial(10) / fibonacci(15)";
+    >! "             abs(-42) + ceil(3.2) - floor(7.9)";
+    >! "----------------------------------------------------------------";
+    >! "  Type 'q' or 'quit' to exit.";
+    >! "================================================================";
+};
+
+
+--- ---- RESULT FORMATTING ----
+
+--- Converts the float result to a printable string.
+--- If the result is a whole number (e.g. 42.0) it is shown
+--- without the decimal part (e.g. "42") for cleaner output.
+func format_result(f: result -> s) {
+    i: result_as_int   = i(result);
+    b: result_is_whole = (result == f(result_as_int));
+    if (result_is_whole) then;
+        return s(result_as_int);
+    end;
+    return s(result);
+};
+
+
+--- ---- REPL ----
+
+--- Runs one evaluation cycle: tokenize → parse → evaluate →
+--- print. Extracted from the main loop to keep the loop body
+--- readable.
+func evaluate_and_print(s: expression) {
+    tokenize(expression);
+    parse_to_rpn();
+    f: result = evaluate_rpn();
+    >! "  = " + format_result(result);
+};
+
+--- ---- ENTRY POINT ----
+
+print_help_banner();
+
+s: user_input = "";
+
+while (user_input != "q" AND user_input != "quit") do;
+    >! "";
+    >! "Enter expression:";
+    >? user_input;
+
+    if (user_input == "q" OR user_input == "quit") then;
+        break;
+    end;
+
+    if (user_input == "") then;
+        >! "  (empty input — please enter an expression)";
+    else;
+        evaluate_and_print(user_input);
+    end;
+end;
+
+>! "";
+>! "Goodbye.";

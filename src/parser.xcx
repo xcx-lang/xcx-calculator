@@ -1,0 +1,194 @@
+--- ============================================================
+--- parser.xcx
+--- .
+--- Responsibility: convert the flat `token_list` produced by
+--- tokenizer.xcx into a Reverse Polish Notation (RPN) queue
+--- stored in `rpn_queue`, using the Shunting Yard algorithm.
+--- .
+--- Also owns:
+---   - operator precedence and associativity rules
+---   - the set of known named constants (PI, E, …)
+---   - the set of known unary functions (sqrt, sin, …)
+---   - constant resolution  (name → float value)
+--- .
+--- Usage:
+---   tokenize(expression);   --- from tokenizer.xcx
+---   parse_to_rpn();
+---   --- rpn_queue is now ready for evaluate_rpn() in evaluator.xcx
+--- ============================================================
+
+include "math.xcx"      as math;
+include "tokenizer.xcx";          --- provides token_list, token_is_operator
+
+
+--- ---- SHARED RPN QUEUE ----
+--- Written by parse_to_rpn(), read by evaluate_rpn().
+
+array:s: rpn_queue {};
+
+
+--- ---- OPERATOR PRECEDENCE AND ASSOCIATIVITY ----
+
+--- Returns the binding strength of a binary operator.
+--- Higher value = tighter binding.
+---   ^  →  4   (exponentiation)
+---   *  /  %  →  3   (multiplicative)
+---   +  -  →  2   (additive)
+func operator_precedence(s: operator_token -> i) {
+    if (operator_token == "^") then;
+        return 4;
+    end;
+    if (operator_token == "*" OR operator_token == "/" OR operator_token == "%") then;
+        return 3;
+    end;
+    if (operator_token == "+" OR operator_token == "-") then;
+        return 2;
+    end;
+    return 0;
+};
+
+--- Returns true if the operator is right-associative.
+--- Only exponentiation (^) is right-associative in this
+--- calculator, so  2 ^ 3 ^ 2  is parsed as  2 ^ (3 ^ 2) = 512,
+--- not  (2 ^ 3) ^ 2 = 64.
+func operator_is_right_associative(s: operator_token -> b) {
+    return operator_token == "^";
+};
+
+
+--- ---- NAMED CONSTANTS ----
+
+--- Returns true if the token matches a supported math constant.
+func token_is_constant(s: token -> b) {
+    return token == "PI"   OR token == "E"
+        OR token == "TAU"  OR token == "PHI"
+        OR token == "SQRT2" OR token == "INF";
+};
+
+--- Resolves a constant name to its float value.
+--- Delegates to the values defined in math.xcx.
+func resolve_constant_value(s: constant_name -> f) {
+    if (constant_name == "PI")    then; return math.PI;    end;
+    if (constant_name == "E")     then; return math.E;     end;
+    if (constant_name == "TAU")   then; return math.TAU;   end;
+    if (constant_name == "PHI")   then; return math.PHI;   end;
+    if (constant_name == "SQRT2") then; return math.SQRT2; end;
+    if (constant_name == "INF")   then; return math.INF;   end;
+    halt.error >! "Unknown constant: " + constant_name;
+    return 0.0;
+};
+
+
+--- ---- NAMED FUNCTIONS ----
+
+--- Returns true if the token is a supported unary math function.
+func token_is_function(s: token -> b) {
+    return token == "sqrt"      OR token == "cbrt"
+        OR token == "sin"       OR token == "cos"    OR token == "tan"
+        OR token == "asin"      OR token == "acos"   OR token == "atan"
+        OR token == "ln"        OR token == "log2"   OR token == "log10"
+        OR token == "exp"       OR token == "abs"
+        OR token == "floor"     OR token == "ceil"   OR token == "round"
+        OR token == "factorial" OR token == "fibonacci";
+};
+
+
+--- ---- SHUNTING YARD HELPERS ----
+
+--- Returns true when the operator currently on top of the
+--- operator stack should be popped to the output queue before
+--- the incoming operator is pushed. This implements standard
+--- precedence and associativity rules.
+func stack_top_has_priority_over(s: top_token, s: incoming_token -> b) {
+    if (token_is_operator(top_token) == false) then;
+        return false;
+    end;
+    b: top_has_higher_precedence  = operator_precedence(top_token) > operator_precedence(incoming_token);
+    b: precedences_are_equal      = operator_precedence(top_token) == operator_precedence(incoming_token);
+    b: incoming_is_left_assoc     = operator_is_right_associative(incoming_token) == false;
+    return top_has_higher_precedence OR (precedences_are_equal AND incoming_is_left_assoc);
+};
+
+
+--- ---- SHUNTING YARD ALGORITHM ----
+
+--- Reads `token_list` and writes `rpn_queue`.
+--- After this function returns, rpn_queue holds the expression
+--- in postfix (RPN) order, ready for left-to-right evaluation.
+--- .
+--- Algorithm overview (Dijkstra, 1961):
+---   For each token:
+---     number/constant → output queue directly
+---     function        → operator stack
+---     operator        → pop higher-precedence ops first, then push
+---     "("             → operator stack
+---     ")"             → pop until matching "(", then pop function if present
+---   Drain remaining operators from stack to queue.
+func parse_to_rpn() {
+    rpn_queue.clear();
+
+    --- Local operator stack (functions also sit here until their ")" arrives)
+    array:s: operator_stack {};
+
+    i: token_index = 0;
+    i: token_count = token_list.size();
+
+    while (token_index < token_count) do;
+        s: current_token = token_list.get(token_index);
+
+        --- Number literal: send directly to output
+        if (char_is_digit(current_token.slice(0, 1)) OR current_token.slice(0, 1) == ".") then;
+            rpn_queue.push(current_token);
+
+        --- Named constant: resolve to its numeric string and send to output
+        elif (token_is_constant(current_token)) then;
+            rpn_queue.push(s(resolve_constant_value(current_token)));
+
+        --- Function name: push onto operator stack to await its argument
+        elif (token_is_function(current_token)) then;
+            operator_stack.push(current_token);
+
+        --- Binary operator: drain higher-precedence operators first
+        elif (token_is_operator(current_token)) then;
+            while (operator_stack.isEmpty() == false) do;
+                s: stack_top = operator_stack.get(operator_stack.size() - 1);
+                if (stack_top_has_priority_over(stack_top, current_token)) then;
+                    rpn_queue.push(operator_stack.pop());
+                else;
+                    break;
+                end;
+            end;
+            operator_stack.push(current_token);
+
+        --- Left parenthesis: push as a scope marker
+        elif (current_token == "(") then;
+            operator_stack.push(current_token);
+
+        --- Right parenthesis: pop to output until the matching "(" is found
+        elif (current_token == ")") then;
+            while (operator_stack.isEmpty() == false) do;
+                s: stack_top = operator_stack.get(operator_stack.size() - 1);
+                if (stack_top == "(") then; break; end;
+                rpn_queue.push(operator_stack.pop());
+            end;
+            --- Discard the left parenthesis itself
+            if (operator_stack.isEmpty() == false) then;
+                operator_stack.pop();
+            end;
+            --- If a function was waiting for this closing paren, emit it now
+            if (operator_stack.isEmpty() == false) then;
+                s: possible_function = operator_stack.get(operator_stack.size() - 1);
+                if (token_is_function(possible_function)) then;
+                    rpn_queue.push(operator_stack.pop());
+                end;
+            end;
+        end;
+
+        token_index = token_index + 1;
+    end;
+
+    --- Drain any remaining operators from the stack to the output
+    while (operator_stack.isEmpty() == false) do;
+        rpn_queue.push(operator_stack.pop());
+    end;
+};

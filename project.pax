@@ -1,0 +1,9 @@
+---
+PAX Project Configuration
+*---
+/
+    name :: "calc",
+    deps :: [
+        "xcx-lang/math-lib"
+    ]
+/
